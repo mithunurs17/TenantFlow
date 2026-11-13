@@ -194,8 +194,9 @@ class CheckoutView(APIView):
  def post(self,request):
   if not settings.STRIPE_SECRET_KEY: return Response({"detail":"Set STRIPE_SECRET_KEY to enable test checkout."},status=503)
   stripe.api_key=settings.STRIPE_SECRET_KEY
-  price_id=request.data.get("price_id")
-  if not price_id: return Response({"detail":"price_id required"},status=400)
+  price_id=(request.data.get("price_id") or settings.STRIPE_PRICE_ID or "").strip()
+  if not price_id: return Response({"detail":"Professional plan billing is not configured yet. Please contact your workspace administrator."},status=503)
+  if not price_id.startswith("price_"): return Response({"detail":"The configured Stripe Price ID is invalid. Please contact support."},status=503)
   ws=Membership.objects.filter(user=request.user,workspace_id=request.user.active_workspace_id).select_related("workspace").first()
   if not ws: ws=Membership.objects.filter(user=request.user).select_related("workspace").first()
   if not ws: return Response({"detail":"Workspace membership required."},status=403)
@@ -216,13 +217,13 @@ class CheckoutView(APIView):
 
 class BillingManageView(APIView):
  def get(self,request):
-  wsid=request.user.active_workspace_id
-  sub=Subscription.objects.filter(workspace_id=wsid).first()
-  if not sub: return Response({"plan":"free","status":"active","period_end":None})
+  wsid=request.user.active_workspace_id or Membership.objects.filter(user=request.user).values_list("workspace_id",flat=True).first()
+  sub=Subscription.objects.filter(workspace_id=wsid).first() if wsid else None
+  if not sub: return Response({"plan":"free","status":"active","period_end":None,"cancel_at_period_end":False})
   return Response({"plan":sub.plan,"status":sub.status,"period_end":sub.period_end,"cancel_at_period_end":False})
  def post(self,request):
-  wsid=request.user.active_workspace_id
-  membership=Membership.objects.filter(user=request.user,workspace_id=wsid).first()
+  wsid=request.user.active_workspace_id or Membership.objects.filter(user=request.user).values_list("workspace_id",flat=True).first()
+  membership=Membership.objects.filter(user=request.user,workspace_id=wsid).first() if wsid else None
   if not membership or membership.role not in ("owner","admin"): return Response({"detail":"Only workspace owners/admins can manage billing."},status=403)
   sub=Subscription.objects.filter(workspace_id=wsid).first()
   if not sub or not sub.stripe_subscription_id: return Response({"detail":"No active Stripe subscription found."},status=404)
